@@ -427,27 +427,30 @@ function stopLiveTracking() {
 }
 
 async function fetchLiveGpsFromAdafruit() {
-    const response = await fetch(ADAFRUIT_LAST_VALUE_URL, {
-        headers: {
-            "X-AIO-Key": ADAFRUIT_AIO_KEY
+    const AIO_USERNAME = 'Manu123456789';
+    const AIO_FEED_KEY = 'gpslocation';
+    const AIO_KEY = 'aio_NHkH19jkybjd8jRjCtvSZ4lSqHDP'; 
+
+    try {
+        const response = await fetch(`https://io.adafruit.com/api/v2/${AIO_USERNAME}/feeds/${AIO_FEED_KEY}/data/last`, {
+            method: 'GET',
+            headers: {
+                'X-AIO-Key': AIO_KEY,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`Adafruit request failed with status ${response.status}`);
         }
-    });
 
-    if (!response.ok) {
-        throw new Error(`Adafruit request failed with status ${response.status}`);
+        const data = await response.json();
+        return data; 
+
+    } catch (error) {
+        console.error("Live GPS tracking failed:", error);
+        return null;
     }
-
-    const payload = await response.json();
-    const rawValue = String(payload?.value || "").trim();
-    const [latRaw, lonRaw] = rawValue.split(",").map((part) => part.trim());
-    const lat = parseFloat(latRaw);
-    const lng = parseFloat(lonRaw);
-
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        throw new Error(`Invalid GPS value from feed: ${rawValue}`);
-    }
-
-    return { lat, lng };
 }
 
 async function updateLiveBus406Marker(bus) {
@@ -455,8 +458,23 @@ async function updateLiveBus406Marker(bus) {
         return;
     }
 
-    const position = await fetchLiveGpsFromAdafruit();
-    console.log("📍 LIVE BUS DATA RECEIVED:", position);
+    const data = await fetchLiveGpsFromAdafruit();
+    console.log("📍 LIVE BUS DATA RECEIVED:", data);
+
+    if (!data || typeof data.value !== "string") {
+        return;
+    }
+
+    const [latString, lngString] = data.value.split(",");
+    const lat = parseFloat(latString);
+    const lng = parseFloat(lngString);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        console.error("Invalid GPS value format from Adafruit:", data.value);
+        return;
+    }
+
+    const position = { lat, lng };
     const busIconUrl = "https://maps.google.com/mapfiles/kml/shapes/bus.png";
 
     if (!googleMarker) {
