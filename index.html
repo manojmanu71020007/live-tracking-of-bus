@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bus Tracking System</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📍 Bus Tracking System</h1>
+            <p>Find and Track Buses in Real-Time</p>
+        </header>
+
+        <section class="search-section">
+            <div class="input-group">
+                <label for="bus-number">Bus Number</label>
+                <input type="text" id="bus-number" placeholder="Enter bus number">
+            </div>
+            <div>
+                <h4>(Optional)</h4>
+                <div class="input-group">
+                    <label for="origin">Origin</label>
+                    <input type="text" id="origin" placeholder="Enter starting point">
+                </div>
+                <div class="input-group">
+                    <label for="destination">Destination</label>
+                    <input type="text" id="destination" placeholder="Enter destination">
+                </div>
+            </div>
+            <button id="search-btn" class="btn-search">Search Buses</button>
+            <button id="show-all-btn" class="btn-secondary">Show All Buses</button>
+        </section>
+
+        <h3>🚌 Available Buses</h3>
+        <div id="buses-list" class="bus-list">
+            <!-- Buses will be loaded dynamically -->
+        </div>
+
+        <div class="details-container">
+            <section id="bus-details" class="details-section">
+                <h3>📋 Bus Details</h3>
+                <div id="selected-bus-info">Select a bus to view details</div>
+            </section>
+
+            <section id="route-details" class="details-section">
+                <h3>🚏 Route Details</h3>
+                <div id="route-stops-list">Select a bus to view route details</div>
+            </section>
+        </div>
+
+        <section class="map-section">
+            <h3>🗺️ Route Map</h3>
+            <div id="map"></div>
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        function loadGoogleMaps() {
+            if (window.google && window.google.maps) {
+                initMapCallback();
+                return;
+            }
+
+            const apiKey = "AIzaSyDOkNou5rOP7-hsu8kDEqYlY52LzV-IQlQ";
+            if (!apiKey || apiKey === "YOUR_GOOGLE_MAPS_API_KEY") {
+                initMapCallback();
+                return;
+            }
+
+            const script = document.createElement("script");
+            script.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(apiKey);
+            script.onload = function () {
+                initMapCallback();
+            };
+            script.onerror = function () {
+                console.error("Failed to load Google Maps API");
+                document.getElementById("map").innerHTML =
+                    "<p class='map-error'>Failed to load map. Please check your internet connection and API key.</p>";
+            };
+            document.head.appendChild(script);
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+            loadGoogleMaps();
+        });
+    </script>
+</body>
+</html>
