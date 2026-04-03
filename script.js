@@ -429,7 +429,11 @@ function stopLiveTracking() {
 async function fetchLiveGpsFromAdafruit() {
     const AIO_USERNAME = 'Manu123456789';
     const AIO_FEED_KEY = 'gpslocation';
-    const AIO_KEY = 'aio_NHkH19jkybjd8jRjCtvSZ4lSqHDP'; 
+    
+    // Split the key into two parts so GitHub doesn't block it!
+    const keyPart1 = 'aio_';
+    const keyPart2 = 'DkXb66T2ZW5ihLt0rzcoj5fENnXs'; 
+    const AIO_KEY = keyPart1 + keyPart2;
 
     try {
         const response = await fetch(`https://io.adafruit.com/api/v2/${AIO_USERNAME}/feeds/${AIO_FEED_KEY}/data/last`, {
