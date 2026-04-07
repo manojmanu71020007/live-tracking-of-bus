@@ -56,42 +56,36 @@
         </section>
     </div>
 
+    <script src="script.js"></script>
     <script>
-        window.APP_CONFIG = {
-            googleMapsApiKey: "__GOOGLE_MAPS_API_KEY__"
-        };
-    </script>
-    <script src="/script.js"></script>
-    <script>
-        (function loadGoogleMaps() {
+        function loadGoogleMaps() {
             if (window.google && window.google.maps) {
-                window.initMapCallback();
+                initMapCallback();
                 return;
             }
 
-            const apiKey = (window.APP_CONFIG && window.APP_CONFIG.googleMapsApiKey)
-                ? String(window.APP_CONFIG.googleMapsApiKey).trim()
-                : "";
-
+            const apiKey = "AIzaSyDOkNou5rOP7-hsu8kDEqYlY52LzV-IQlQ";
             if (!apiKey || apiKey === "YOUR_GOOGLE_MAPS_API_KEY") {
-                window.initMapCallback();
+                initMapCallback();
                 return;
             }
 
             const script = document.createElement("script");
-            script.src = "https://maps.googleapis.com/maps/api/js?key="
-                + encodeURIComponent(apiKey)
-                + "&callback=initMapCallback";
-            script.async = true;
-            script.defer = true;
+            script.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(apiKey);
+            script.onload = function () {
+                initMapCallback();
+            };
             script.onerror = function () {
                 console.error("Failed to load Google Maps API");
                 document.getElementById("map").innerHTML =
                     "<p class='map-error'>Failed to load map. Please check your internet connection and API key.</p>";
-                window.initMapCallback();
             };
             document.head.appendChild(script);
-        })();
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+            loadGoogleMaps();
+        });
     </script>
 </body>
 </html>
