@@ -42,6 +42,15 @@ const ADAFRUIT_AIO_KEY = "aio_vwcp40GASF4gyLISllMv1hgHHrwa";
 const ADAFRUIT_FEED_NAME = "gpslocation";
 const ADAFRUIT_LAST_VALUE_URL = `https://io.adafruit.com/api/v2/${ADAFRUIT_USERNAME}/feeds/${ADAFRUIT_FEED_NAME}/data/last`;
 const LIVE_TRACKING_INTERVAL_MS = 5000;
+const LIVE_GPS_ENDPOINT_CANDIDATES = [
+    "/api/live-gps",
+    "/api/live-gps/",
+    "/live-gps",
+    "/live-gps/",
+    "https://live-tracking-of-bus.onrender.com/api/live-gps",
+    "https://live-tracking-of-bus.onrender.com/live-gps"
+];
+let lastLiveGpsStatusMessage = "";
 
 function normalize(value) {
     return value.trim().toLowerCase();
@@ -426,26 +435,184 @@ function stopLiveTracking() {
     }
 }
 
-async function fetchLiveGpsFromAdafruit() {
-    try {
-        const response = await fetch("/api/live-gps", { method: "GET" });
+function getLiveGpsStatusEl() {
+    let statusEl = document.getElementById("live-gps-status");
+    if (statusEl) {
+        return statusEl;
+    }
 
-        if (!response.ok) {
-            const errorPayload = await response.json().catch(() => null);
-            console.warn("Live GPS endpoint returned a non-success response:", {
-                status: response.status,
-                payload: errorPayload
-            });
-            return null;
-        }
-
-        const data = await response.json();
-        return data;
-
-    } catch (error) {
-        console.error("Live GPS tracking failed:", error);
+    const mapSection = document.querySelector(".map-section");
+    if (!mapSection) {
         return null;
     }
+
+    statusEl = document.createElement("p");
+    statusEl.id = "live-gps-status";
+    statusEl.className = "meta";
+    statusEl.style.margin = "8px 0 0";
+    statusEl.style.display = "none";
+    mapSection.insertBefore(statusEl, mapEl);
+
+    return statusEl;
+}
+
+function setLiveGpsStatus(message, level = "info") {
+    const statusEl = getLiveGpsStatusEl();
+    if (!statusEl) {
+        return;
+    }
+
+    const normalizedMessage = (message || "").trim();
+    if (normalizedMessage === lastLiveGpsStatusMessage) {
+        return;
+    }
+
+    lastLiveGpsStatusMessage = normalizedMessage;
+
+    if (!normalizedMessage) {
+        statusEl.textContent = "";
+        statusEl.style.display = "none";
+        return;
+    }
+
+    statusEl.textContent = normalizedMessage;
+    statusEl.style.display = "block";
+    statusEl.style.color = level === "error" ? "#b42318" : "#486581";
+}
+
+function getLiveGpsEndpointCandidates() {
+    const baseOrigin = window.location.origin;
+    const resolved = LIVE_GPS_ENDPOINT_CANDIDATES.map((endpoint) => {
+        if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
+            return endpoint;
+        }
+        return new URL(endpoint, baseOrigin).toString();
+    });
+
+    return [...new Set(resolved)];
+}
+
+async function fetchLiveGpsFromAdafruit() {
+    const endpoints = getLiveGpsEndpointCandidates();
+    let lastFailure = null;
+
+    for (const endpoint of endpoints) {
+        try {
+            const response = await fetch(endpoint, { method: "GET" });
+
+            if (!response.ok) {
+                const errorPayload = await response.json().catch(() => null);
+                lastFailure = {
+                    endpoint,
+                    status: response.status,
+                    payload: errorPayload
+                };
+
+                // Try alternate deployment paths if the endpoint is not found.
+                if (response.status === 404) {
+                    continue;
+                }
+
+                return {
+                    ok: false,
+                    endpoint,
+                    status: response.status,
+                    error: errorPayload?.error || "Live GPS endpoint returned an error response.",
+                    reason: errorPayload?.reason || null
+                };
+            }
+
+            const data = await response.json();
+            return { ...data, endpoint };
+        } catch (error) {
+            lastFailure = {
+                endpoint,
+                status: 0,
+                error: error.message
+            };
+        }
+    }
+
+    try {
+        // Production-safe fallback when backend live GPS routes are unavailable.
+        const adafruitResponse = await fetch(ADAFRUIT_LAST_VALUE_URL, {
+            method: "GET",
+            headers: {
+                "X-AIO-Key": ADAFRUIT_AIO_KEY,
+                "Content-Type": "application/json"
+            }
+        });
+
+        if (adafruitResponse.ok) {
+            const adafruitPayload = await adafruitResponse.json();
+            const directPayloadCoords = parseLatLngObject(adafruitPayload);
+            const locationCoords = parseLatLngObject(adafruitPayload?.location);
+            const parsedValue = parseAdafruitGpsValue(adafruitPayload);
+
+            if (directPayloadCoords) {
+                return {
+                    ok: true,
+                    lat: directPayloadCoords.position.lat,
+                    lng: directPayloadCoords.position.lng,
+                    sourceFormat: "adafruit-direct-payload",
+                    endpoint: ADAFRUIT_LAST_VALUE_URL,
+                    rawPayload: adafruitPayload
+                };
+            }
+
+            if (locationCoords) {
+                return {
+                    ok: true,
+                    lat: locationCoords.position.lat,
+                    lng: locationCoords.position.lng,
+                    sourceFormat: "adafruit-direct-location",
+                    endpoint: ADAFRUIT_LAST_VALUE_URL,
+                    rawPayload: adafruitPayload
+                };
+            }
+
+            if (parsedValue.type === "coords") {
+                return {
+                    ok: true,
+                    lat: parsedValue.position.lat,
+                    lng: parsedValue.position.lng,
+                    sourceFormat: "adafruit-direct-value",
+                    endpoint: ADAFRUIT_LAST_VALUE_URL,
+                    rawPayload: adafruitPayload
+                };
+            }
+
+            lastFailure = {
+                endpoint: ADAFRUIT_LAST_VALUE_URL,
+                status: 422,
+                error: parsedValue.reason || "Adafruit direct payload does not contain valid coordinates."
+            };
+        } else {
+            lastFailure = {
+                endpoint: ADAFRUIT_LAST_VALUE_URL,
+                status: adafruitResponse.status,
+                error: "Adafruit direct request failed."
+            };
+        }
+    } catch (error) {
+        lastFailure = {
+            endpoint: ADAFRUIT_LAST_VALUE_URL,
+            status: 0,
+            error: error.message
+        };
+    }
+
+    if (lastFailure) {
+        console.warn("Live GPS lookup failed across all endpoint candidates:", lastFailure);
+    }
+
+    return {
+        ok: false,
+        status: lastFailure?.status || 0,
+        endpoint: lastFailure?.endpoint || null,
+        error: "Live GPS data is currently unavailable.",
+        reason: lastFailure?.error || null
+    };
 }
 
 function isValidLatitude(value) {
@@ -606,17 +773,22 @@ async function updateLiveBus406Marker(bus) {
     const data = await fetchLiveGpsFromAdafruit();
     console.debug("Adafruit raw payload before GPS parsing:", data);
 
-    if (!data) {
+    if (!data || !data.ok) {
+        const statusText = data && data.status ? ` (status ${data.status})` : "";
+        setLiveGpsStatus(`Live GPS unavailable${statusText}. Showing route preview only.`, "error");
         return;
     }
 
     if (!data.ok || !Number.isFinite(data.lat) || !Number.isFinite(data.lng)) {
         console.warn("Parsed GPS payload is missing precise lat/lng coordinates:", data);
+        const reasonText = data.reason ? ` ${data.reason}` : "";
+        setLiveGpsStatus(`Live GPS data is invalid.${reasonText}`, "error");
         return;
     }
 
     const position = { lat: data.lat, lng: data.lng };
     console.debug("Parsed coordinates for map marker:", position);
+    setLiveGpsStatus("Live GPS connected.");
 
     const busIconUrl = "https://maps.google.com/mapfiles/kml/shapes/bus.png";
 
@@ -641,6 +813,7 @@ async function updateLiveBus406Marker(bus) {
 
 function startLiveTrackingForBus406(bus) {
     stopLiveTracking();
+    setLiveGpsStatus("Connecting to live GPS...");
 
     const runUpdate = async () => {
         try {
@@ -781,6 +954,10 @@ function selectBus(bus) {
     renderBusDetails(bus);
     renderBusList(filterBuses());
     void renderMap(bus);
+
+    if (normalize(bus.busNumber) !== "406") {
+        setLiveGpsStatus("");
+    }
 }
 
 function filterBuses() {
