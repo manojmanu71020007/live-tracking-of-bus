@@ -19,6 +19,8 @@ let googleMarker = null;
 let routePolyline = null;
 let routeStopMarkers = [];
 let liveTrackingIntervalId = null;
+let pendingMapBus = null;
+let googleMapsLoadState = "loading";
 const MAX_VISIBLE_CARDS = 120;
 const SPECIAL_SEARCH = {
     origin: "presidency university",
@@ -829,6 +831,7 @@ function filterForSpecialShowAll() {
 
 async function renderMap(bus) {
     if (window.google && window.google.maps && googleMap) {
+        pendingMapBus = null;
         stopLiveTracking();
 
         const drewPath = await drawRoutePathForBus(bus);
@@ -854,22 +857,20 @@ async function renderMap(bus) {
         return;
     }
 
-    const bundle = await ensureGtfsBundle();
-    const route = bundle.routes.find((entry) => normalize(entry.busNumber) === "406");
-    const routeTrips = route ? bundle.trips.filter((trip) => String(trip.routeId) === String(route.routeId)) : [];
-    const fallbackStops = routeTrips.length
-        ? TARGET_STOP_ORDER.map((name, index) => `<li>${index + 1}. ${name}</li>`).join("")
-        : "<li>No mappable stop coordinates found for this route.</li>";
+    pendingMapBus = bus;
+
+    if (googleMapsLoadState === "failed") {
+        mapEl.innerHTML = `
+            <div class="map-error">
+                <p>Google Maps could not load. Check your API key and browser network access.</p>
+            </div>
+        `;
+        return;
+    }
 
     mapEl.innerHTML = `
-        <div class="map-fallback">
-            <div>
-                <p>${bus.busNumber} is near:</p>
-                <p><strong>${bus.origin} → ${bus.destination}</strong></p>
-                <p>Approximate location: ${bus.location.lat.toFixed(4)}, ${bus.location.lng.toFixed(4)}</p>
-                <p><strong>Route Stops:</strong></p>
-                <ol>${fallbackStops}</ol>
-            </div>
+        <div class="map-loading">
+            <p>Loading Google Maps...</p>
         </div>
     `;
 }
@@ -954,6 +955,7 @@ function setupEvents() {
 }
 
 function initGoogleMap() {
+    mapEl.innerHTML = "";
     googleMap = new window.google.maps.Map(mapEl, {
         center: { lat: 12.9716, lng: 77.5946 },
         zoom: 12,
@@ -964,8 +966,13 @@ function initGoogleMap() {
 
 function initMapCallback() {
     if (window.google && window.google.maps) {
+        googleMapsLoadState = "ready";
         initGoogleMap();
+        if (pendingMapBus) {
+            void renderMap(pendingMapBus);
+        }
     } else {
+        googleMapsLoadState = "failed";
         mapEl.innerHTML = `
             <div class="map-fallback">
                 <p>Map API key is not configured. Bus locations are shown as text when you pick a bus.</p>
@@ -978,6 +985,12 @@ window.initMapCallback = initMapCallback;
 
 async function initApp() {
     setupEvents();
+
+    mapEl.innerHTML = `
+        <div class="map-loading">
+            <p>Loading Google Maps...</p>
+        </div>
+    `;
 
     try {
         await loadBusesFromBackend();
