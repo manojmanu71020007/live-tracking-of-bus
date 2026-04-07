@@ -12,10 +12,9 @@ const SHAPES_FILE = path.join(BASE_DIR, "shapes", "shapes.txt");
 const ADAFRUIT_USERNAME = process.env.ADAFRUIT_USERNAME || "Manu123456789";
 const ADAFRUIT_FEED_NAME = process.env.ADAFRUIT_FEED_NAME || "gpslocation";
 const keyPart1 = 'aio_';
-const keyPart2 = 'DkXb66T2ZW5ihLt0rzcoj5fENnXs'; 
+const keyPart2 = 'DkXb66T2ZW5ihLt0rzcoj5fENnXs';
 const ADAFRUIT_AIO_KEY = process.env.ADAFRUIT_AIO_KEY || keyPart1 + keyPart2;
 const ADAFRUIT_LAST_VALUE_URL = `https://io.adafruit.com/api/v2/${ADAFRUIT_USERNAME}/feeds/${ADAFRUIT_FEED_NAME}/data/last`;
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || "";
 
 function parseCsvLine(line) {
     const fields = [];
@@ -163,12 +162,7 @@ function loadShapes() {
 }
 
 function sendJson(res, payload, statusCode = 200) {
-    res.writeHead(statusCode, {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
-    });
+    res.writeHead(statusCode, { "Content-Type": "application/json" });
     res.end(JSON.stringify(payload));
 }
 
@@ -179,38 +173,13 @@ function sendFile(res, filePath, contentType) {
             return;
         }
 
-        res.writeHead(200, {
-            "Content-Type": contentType,
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
-        });
+        res.writeHead(200, { "Content-Type": contentType });
         res.end(data);
     });
 }
 
 function sendTextFile(res, filePath) {
     sendFile(res, filePath, "text/plain; charset=utf-8");
-}
-
-function sendIndexHtml(res) {
-    fs.readFile(path.join(BASE_DIR, "index.html"), "utf8", (error, html) => {
-        if (error) {
-            sendJson(res, { error: "File not found" }, 404);
-            return;
-        }
-
-        const safeKey = String(GOOGLE_MAPS_API_KEY).replace(/</g, "\\u003c");
-        const renderedHtml = html.replace("__GOOGLE_MAPS_API_KEY__", safeKey);
-
-        res.writeHead(200, {
-            "Content-Type": "text/html; charset=utf-8",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
-        });
-        res.end(renderedHtml);
-    });
 }
 
 function isValidLatitude(value) {
@@ -349,17 +318,6 @@ async function fetchAndParseAdafruitGps() {
 const server = http.createServer(async (req, res) => {
     const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const pathname = requestUrl.pathname;
-    const method = (req.method || "GET").toUpperCase();
-
-    if (method === "OPTIONS") {
-        res.writeHead(204, {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
-        });
-        res.end();
-        return;
-    }
 
     if (pathname === "/api/routes") {
         try {
@@ -446,7 +404,7 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    if (pathname === "/api/live-gps" || pathname === "/api/live-gps/" || pathname === "/live-gps" || pathname === "/live-gps/") {
+    if (pathname === "/api/live-gps") {
         try {
             const { payload, parsed } = await fetchAndParseAdafruitGps();
 
@@ -507,7 +465,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/" || pathname === "/index.html") {
-        sendIndexHtml(res);
+        sendFile(res, path.join(BASE_DIR, "index.html"), "text/html");
         return;
     }
 
