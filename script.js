@@ -427,29 +427,20 @@ function stopLiveTracking() {
 }
 
 async function fetchLiveGpsFromAdafruit() {
-    const AIO_USERNAME = 'Manu123456789';
-    const AIO_FEED_KEY = 'gpslocation';
-    
-    // Split the key into two parts so GitHub doesn't block it!
-    const keyPart1 = 'aio_';
-    const keyPart2 = 'DkXb66T2ZW5ihLt0rzcoj5fENnXs'; 
-    const AIO_KEY = keyPart1 + keyPart2;
-
     try {
-        const response = await fetch(`https://io.adafruit.com/api/v2/${AIO_USERNAME}/feeds/${AIO_FEED_KEY}/data/last`, {
-            method: 'GET',
-            headers: {
-                'X-AIO-Key': AIO_KEY,
-                'Content-Type': 'application/json'
-            }
-        });
+        const response = await fetch("/api/live-gps", { method: "GET" });
 
         if (!response.ok) {
-            throw new Error(`Adafruit request failed with status ${response.status}`);
+            const errorPayload = await response.json().catch(() => null);
+            console.warn("Live GPS endpoint returned a non-success response:", {
+                status: response.status,
+                payload: errorPayload
+            });
+            return null;
         }
 
         const data = await response.json();
-        return data; 
+        return data;
 
     } catch (error) {
         console.error("Live GPS tracking failed:", error);
@@ -619,27 +610,13 @@ async function updateLiveBus406Marker(bus) {
         return;
     }
 
-    const parsedGps = parseAdafruitGpsValue(data);
-    let position = null;
-
-    if (parsedGps.type === "coords") {
-        position = parsedGps.position;
-    } else if (parsedGps.type === "progress") {
-        position = getPositionFromRouteProgress(parsedGps.progress);
-        if (!position) {
-            console.warn(
-                "Received a single numeric GPS value from Adafruit, but no route path is available yet to map progress to coordinates.",
-                { value: data.value, progress: parsedGps.progress }
-            );
-            return;
-        }
-    } else {
-        console.warn(
-            "Adafruit GPS payload was rejected. Expected lat,lng string, JSON {lat,lng}, or a numeric route progress value.",
-            { value: data.value, reason: parsedGps.reason }
-        );
+    if (!data.ok || !Number.isFinite(data.lat) || !Number.isFinite(data.lng)) {
+        console.warn("Parsed GPS payload is missing precise lat/lng coordinates:", data);
         return;
     }
+
+    const position = { lat: data.lat, lng: data.lng };
+    console.debug("Parsed coordinates for map marker:", position);
 
     const busIconUrl = "https://maps.google.com/mapfiles/kml/shapes/bus.png";
 
