@@ -457,28 +457,190 @@ async function fetchLiveGpsFromAdafruit() {
     }
 }
 
+function isValidLatitude(value) {
+    return Number.isFinite(value) && value >= -90 && value <= 90;
+}
+
+function isValidLongitude(value) {
+    return Number.isFinite(value) && value >= -180 && value <= 180;
+}
+
+function normalizeProgressValue(value) {
+    if (!Number.isFinite(value)) {
+        return null;
+    }
+
+    if (value >= 0 && value <= 1) {
+        return value;
+    }
+
+    if (value >= 0 && value <= 100) {
+        return value / 100;
+    }
+
+    return null;
+}
+
+function parseLatLngObject(candidate) {
+    if (!candidate || typeof candidate !== "object") {
+        return null;
+    }
+
+    const latRaw = candidate.lat ?? candidate.latitude;
+    const lngRaw = candidate.lng ?? candidate.lon ?? candidate.longitude;
+    const lat = Number.parseFloat(latRaw);
+    const lng = Number.parseFloat(lngRaw);
+
+    if (!isValidLatitude(lat) || !isValidLongitude(lng)) {
+        return null;
+    }
+
+    return { type: "coords", position: { lat, lng } };
+}
+
+function parseAdafruitGpsValue(payload) {
+    const rawValue = payload && typeof payload === "object" && "value" in payload
+        ? payload.value
+        : payload;
+
+    const fromObject = parseLatLngObject(rawValue);
+    if (fromObject) {
+        return fromObject;
+    }
+
+    if (typeof rawValue === "number") {
+        const progress = normalizeProgressValue(rawValue);
+        if (progress !== null) {
+            return { type: "progress", progress };
+        }
+        return {
+            type: "invalid",
+            reason: `Numeric GPS value ${rawValue} is out of supported progress range (0-1 or 0-100).`
+        };
+    }
+
+    if (typeof rawValue === "string") {
+        const trimmed = rawValue.trim();
+        if (!trimmed) {
+            return { type: "invalid", reason: "GPS value is an empty string." };
+        }
+
+        const stringAsNumber = Number.parseFloat(trimmed);
+        if (trimmed.match(/^[-+]?\d*\.?\d+$/) && Number.isFinite(stringAsNumber)) {
+            const progress = normalizeProgressValue(stringAsNumber);
+            if (progress !== null) {
+                return { type: "progress", progress };
+            }
+            return {
+                type: "invalid",
+                reason: `Numeric GPS value ${trimmed} is out of supported progress range (0-1 or 0-100).`
+            };
+        }
+
+        const fromCsv = trimmed.split(",").map((part) => part.trim());
+        if (fromCsv.length === 2) {
+            const lat = Number.parseFloat(fromCsv[0]);
+            const lng = Number.parseFloat(fromCsv[1]);
+
+            if (isValidLatitude(lat) && isValidLongitude(lng)) {
+                return { type: "coords", position: { lat, lng } };
+            }
+
+            return {
+                type: "invalid",
+                reason: `CSV GPS value must be valid latitude,longitude but received: ${trimmed}`
+            };
+        }
+
+        if (trimmed.startsWith("{")) {
+            try {
+                const parsedJson = JSON.parse(trimmed);
+                const fromJsonObject = parseLatLngObject(parsedJson);
+                if (fromJsonObject) {
+                    return fromJsonObject;
+                }
+                return {
+                    type: "invalid",
+                    reason: "JSON GPS value is missing valid lat/lng or latitude/longitude fields."
+                };
+            } catch (error) {
+                return {
+                    type: "invalid",
+                    reason: `GPS JSON parse failed: ${error.message}`
+                };
+            }
+        }
+
+        return {
+            type: "invalid",
+            reason: `Unsupported GPS string format: ${trimmed}`
+        };
+    }
+
+    return {
+        type: "invalid",
+        reason: `Unsupported GPS payload type: ${typeof rawValue}`
+    };
+}
+
+function getPositionFromRouteProgress(progress) {
+    if (!routePolyline || typeof routePolyline.getPath !== "function") {
+        return null;
+    }
+
+    const path = routePolyline.getPath();
+    if (!path || typeof path.getLength !== "function" || path.getLength() === 0) {
+        return null;
+    }
+
+    const lastIndex = path.getLength() - 1;
+    const index = Math.max(0, Math.min(lastIndex, Math.round(progress * lastIndex)));
+    const point = path.getAt(index);
+
+    if (!point || typeof point.lat !== "function" || typeof point.lng !== "function") {
+        return null;
+    }
+
+    return {
+        lat: point.lat(),
+        lng: point.lng()
+    };
+}
+
 async function updateLiveBus406Marker(bus) {
     if (!window.google || !window.google.maps || !googleMap) {
         return;
     }
 
     const data = await fetchLiveGpsFromAdafruit();
-    console.log("📍 LIVE BUS DATA RECEIVED:", data);
+    console.debug("Adafruit raw payload before GPS parsing:", data);
 
-    if (!data || typeof data.value !== "string") {
+    if (!data) {
         return;
     }
 
-    const [latString, lngString] = data.value.split(",");
-    const lat = parseFloat(latString);
-    const lng = parseFloat(lngString);
+    const parsedGps = parseAdafruitGpsValue(data);
+    let position = null;
 
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        console.error("Invalid GPS value format from Adafruit:", data.value);
+    if (parsedGps.type === "coords") {
+        position = parsedGps.position;
+    } else if (parsedGps.type === "progress") {
+        position = getPositionFromRouteProgress(parsedGps.progress);
+        if (!position) {
+            console.warn(
+                "Received a single numeric GPS value from Adafruit, but no route path is available yet to map progress to coordinates.",
+                { value: data.value, progress: parsedGps.progress }
+            );
+            return;
+        }
+    } else {
+        console.warn(
+            "Adafruit GPS payload was rejected. Expected lat,lng string, JSON {lat,lng}, or a numeric route progress value.",
+            { value: data.value, reason: parsedGps.reason }
+        );
         return;
     }
 
-    const position = { lat, lng };
     const busIconUrl = "https://maps.google.com/mapfiles/kml/shapes/bus.png";
 
     if (!googleMarker) {
