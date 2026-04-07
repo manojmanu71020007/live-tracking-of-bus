@@ -9,6 +9,15 @@ const STOPS_FILE = path.join(BASE_DIR, "stops", "stops.txt");
 const TRIPS_FILE = path.join(BASE_DIR, "trips", "trips.txt");
 const STOP_TIMES_FILE = path.join(BASE_DIR, "stop_times", "stop_times.txt");
 const SHAPES_FILE = path.join(BASE_DIR, "shapes", "shapes.txt");
+const ADAFRUIT_USERNAME = process.env.ADAFRUIT_USERNAME || "Manu123456789";
+const ADAFRUIT_FEED_NAME = process.env.ADAFRUIT_FEED_NAME || "gpslocation";
+const ADAFRUIT_AIO_KEY = (process.env.ADAFRUIT_AIO_KEY || "").trim();
+const ADAFRUIT_LAST_VALUE_URL = `https://io.adafruit.com/api/v2/${ADAFRUIT_USERNAME}/feeds/${ADAFRUIT_FEED_NAME}/data/last`;
+
+if (!ADAFRUIT_AIO_KEY) {
+    console.error("Missing ADAFRUIT_AIO_KEY environment variable.");
+    process.exit(1);
+}
 
 function parseCsvLine(line) {
     const fields = [];
@@ -156,7 +165,12 @@ function loadShapes() {
 }
 
 function sendJson(res, payload, statusCode = 200) {
-    res.writeHead(statusCode, { "Content-Type": "application/json" });
+    res.writeHead(statusCode, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
+    });
     res.end(JSON.stringify(payload));
 }
 
@@ -167,7 +181,12 @@ function sendFile(res, filePath, contentType) {
             return;
         }
 
-        res.writeHead(200, { "Content-Type": contentType });
+        res.writeHead(200, {
+            "Content-Type": contentType,
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
+        });
         res.end(data);
     });
 }
@@ -176,9 +195,153 @@ function sendTextFile(res, filePath) {
     sendFile(res, filePath, "text/plain; charset=utf-8");
 }
 
-const server = http.createServer((req, res) => {
+function isValidLatitude(value) {
+    return Number.isFinite(value) && value >= -90 && value <= 90;
+}
+
+function isValidLongitude(value) {
+    return Number.isFinite(value) && value >= -180 && value <= 180;
+}
+
+function parseLatLngFromObject(candidate) {
+    if (!candidate || typeof candidate !== "object") {
+        return null;
+    }
+
+    const lat = Number.parseFloat(candidate.lat ?? candidate.latitude);
+    const lng = Number.parseFloat(candidate.lng ?? candidate.lon ?? candidate.longitude);
+
+    if (!isValidLatitude(lat) || !isValidLongitude(lng)) {
+        return null;
+    }
+
+    return { lat, lng, sourceFormat: "object" };
+}
+
+function parsePreciseGpsPayload(rawPayload) {
+    const payloadObject = rawPayload && typeof rawPayload === "object" ? rawPayload : null;
+
+    if (payloadObject) {
+        const fromPayloadFields = parseLatLngFromObject(payloadObject);
+        if (fromPayloadFields) {
+            return { ok: true, ...fromPayloadFields, sourceFormat: "adafruit-payload-fields", rawValue: payloadObject.value };
+        }
+
+        const fromLocation = parseLatLngFromObject(payloadObject.location);
+        if (fromLocation) {
+            return { ok: true, ...fromLocation, sourceFormat: "adafruit-location-object", rawValue: payloadObject.value };
+        }
+    }
+
+    const rawValue = rawPayload && typeof rawPayload === "object" && "value" in rawPayload
+        ? rawPayload.value
+        : rawPayload;
+
+    const directObject = parseLatLngFromObject(rawValue);
+    if (directObject) {
+        return { ok: true, ...directObject, rawValue };
+    }
+
+    if (typeof rawValue === "string") {
+        const trimmed = rawValue.trim();
+        if (!trimmed) {
+            return { ok: false, reason: "GPS value is empty.", rawValue };
+        }
+
+        const csvParts = trimmed.split(",").map((part) => part.trim());
+        if (csvParts.length === 2) {
+            const lat = Number.parseFloat(csvParts[0]);
+            const lng = Number.parseFloat(csvParts[1]);
+
+            if (isValidLatitude(lat) && isValidLongitude(lng)) {
+                return { ok: true, lat, lng, sourceFormat: "csv", rawValue };
+            }
+
+            return {
+                ok: false,
+                reason: `CSV GPS must be valid latitude,longitude. Received: ${trimmed}`,
+                rawValue
+            };
+        }
+
+        if (trimmed.startsWith("{")) {
+            try {
+                const parsedJson = JSON.parse(trimmed);
+                const jsonObject = parseLatLngFromObject(parsedJson);
+                if (jsonObject) {
+                    return { ok: true, ...jsonObject, sourceFormat: "json-string", rawValue };
+                }
+
+                return {
+                    ok: false,
+                    reason: "JSON GPS value is missing valid lat/lng or latitude/longitude.",
+                    rawValue
+                };
+            } catch (error) {
+                return {
+                    ok: false,
+                    reason: `GPS JSON parse failed: ${error.message}`,
+                    rawValue
+                };
+            }
+        }
+
+        if (trimmed.match(/^[-+]?\d*\.?\d+$/)) {
+            return {
+                ok: false,
+                reason: `Single numeric GPS value ${trimmed} is not precise enough. Publish lat,lng or JSON {\"lat\":...,\"lng\":...}.`,
+                rawValue
+            };
+        }
+
+        return {
+            ok: false,
+            reason: `Unsupported GPS string format: ${trimmed}`,
+            rawValue
+        };
+    }
+
+    return {
+        ok: false,
+        reason: `Unsupported GPS payload type: ${typeof rawValue}`,
+        rawValue
+    };
+}
+
+async function fetchAndParseAdafruitGps() {
+    const response = await fetch(ADAFRUIT_LAST_VALUE_URL, {
+        method: "GET",
+        headers: {
+            "X-AIO-Key": ADAFRUIT_AIO_KEY,
+            "Content-Type": "application/json"
+        }
+    });
+
+    if (!response.ok) {
+        throw new Error(`Adafruit request failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    console.debug("Adafruit raw GPS payload:", payload);
+
+    const parsed = parsePreciseGpsPayload(payload);
+    return { payload, parsed };
+}
+
+const server = http.createServer(async (req, res) => {
     const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const pathname = requestUrl.pathname;
+    const method = (req.method || "GET").toUpperCase();
+
+    if (method === "OPTIONS") {
+        res.writeHead(204, {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, X-Requested-With"
+        });
+        res.end();
+        return;
+    }
 
     if (pathname === "/api/routes") {
         try {
@@ -261,6 +424,41 @@ const server = http.createServer((req, res) => {
             sendJson(res, { count: shapes.length, shapes });
         } catch (error) {
             sendJson(res, { error: "Failed to load shapes", details: error.message }, 500);
+        }
+        return;
+    }
+
+    if (pathname === "/api/live-gps" || pathname === "/api/live-gps/" || pathname === "/live-gps" || pathname === "/live-gps/") {
+        try {
+            const { payload, parsed } = await fetchAndParseAdafruitGps();
+
+            if (!parsed.ok) {
+                sendJson(
+                    res,
+                    {
+                        ok: false,
+                        error: "Invalid or incomplete GPS payload from Adafruit.",
+                        reason: parsed.reason,
+                        expectedFormats: [
+                            "12.9716,77.5946",
+                            { lat: 12.9716, lng: 77.5946 }
+                        ],
+                        rawPayload: payload
+                    },
+                    422
+                );
+                return;
+            }
+
+            sendJson(res, {
+                ok: true,
+                lat: parsed.lat,
+                lng: parsed.lng,
+                sourceFormat: parsed.sourceFormat,
+                rawPayload: payload
+            });
+        } catch (error) {
+            sendJson(res, { ok: false, error: "Failed to fetch live GPS from Adafruit", details: error.message }, 500);
         }
         return;
     }
