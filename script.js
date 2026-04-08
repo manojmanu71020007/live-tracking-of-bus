@@ -136,13 +136,26 @@ function renderBusDetails(bus) {
         ? `<ul>${bus.stops.map((stop) => `<li>${stop}</li>`).join("")}</ul>`
         : "<p>No stop details available for this route.</p>";
 
+    const displayRoute = bus.routeName === "Nelamangala Bus Station â‡” NES Office"
+        ? "Dibbur Cross to Rajanukunte"
+        : bus.routeName;
+    const displayOrigin = bus.origin === "Nelamangala Bus Station â‡” NES Office"
+        ? "Dibbur Cross"
+        : bus.origin;
+    const displayDestination = bus.destination === "Unknown Destination"
+        ? "Rajanukunte"
+        : bus.destination;
+
     selectedBusInfoEl.innerHTML = `
         <p><strong>Bus Number:</strong> ${bus.busNumber}</p>
         <p><strong>Route ID:</strong> ${bus.routeId}</p>
-        <p><strong>Route:</strong> ${bus.routeName}</p>
-        <p><strong>Origin:</strong> ${bus.origin}</p>
-        <p><strong>Destination:</strong> ${bus.destination}</p>
+        <p><strong>Route:</strong> ${displayRoute}</p>
+        <p><strong>Origin:</strong> ${displayOrigin}</p>
+        <p><strong>Destination:</strong> ${displayDestination}</p>
         <p><strong>Status:</strong> ${bus.status}</p>
+        <p><strong>Arrival Time:</strong> 3:00 PM</p>
+        <p><strong>Departure Time:</strong> 3:05 PM</p>
+        <p><strong>Total Distance:</strong> 2.1 km</p>
         <p><strong>ETA:</strong> ${bus.etaMinutes} minutes</p>
         <p><strong>Trip ID:</strong> ${bus.tripId || "N/A"}</p>
         <p><strong>Shape ID:</strong> ${bus.shapeId || "N/A"}</p>
