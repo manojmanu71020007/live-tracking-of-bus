@@ -155,8 +155,8 @@ function renderBusDetails(bus) {
         <p><strong>Status:</strong> ${bus.status}</p>
         <p><strong>Arrival Time:</strong> 3:00 PM</p>
         <p><strong>Departure Time:</strong> 3:05 PM</p>
-        <p><strong>Total Distance:</strong> 2.1 km</p>
-        <p><strong>ETA:</strong> ${bus.etaMinutes} minutes</p>
+        <p><strong>Total Distance:</strong> 4.2 km</p>
+        <p><strong>ETA:</strong> 9 minutes</p>
         <p><strong>Trip ID:</strong> ${bus.tripId || "N/A"}</p>
         <p><strong>Shape ID:</strong> ${bus.shapeId || "N/A"}</p>
     `;
