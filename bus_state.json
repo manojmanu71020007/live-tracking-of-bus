@@ -1,0 +1,19 @@
+{
+  "7169": {
+    "status": "On Time",
+    "statusTimings": {
+      "Delayed": {
+        "arrival": "15:00",
+        "departure": "15:30"
+      },
+      "On Time": {
+        "arrival": "15:00",
+        "departure": "15:05"
+      },
+      "Ahead": {
+        "arrival": "14:50",
+        "departure": "14:55"
+      }
+    }
+  }
+}

@@ -172,6 +172,11 @@ h3 {
     color: #9a3412;
 }
 
+.status.ahead {
+    background: rgba(91, 108, 255, 0.2);
+    color: #1d2d7a;
+}
+
 .details-container {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -194,6 +199,47 @@ h3 {
 #route-stops-list ul {
     margin: 8px 0 0;
     padding-left: 18px;
+}
+
+.status-control,
+.timing-controls {
+    margin-top: 8px;
+}
+
+.timing-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 10px;
+}
+
+.time-input-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.apply-changes-btn {
+    margin-top: 2px;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-weight: 700;
+    cursor: pointer;
+    color: #ffffff;
+    background: linear-gradient(135deg, var(--accent), #3956c6);
+    box-shadow: 0 8px 16px rgba(57, 86, 198, 0.2);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.apply-changes-btn:hover {
+    transform: translateY(-1px);
+    opacity: 0.98;
+    box-shadow: 0 10px 18px rgba(57, 86, 198, 0.28);
+}
+
+.apply-changes-btn:focus-visible {
+    outline: 2px solid #2f3e8f;
+    outline-offset: 2px;
 }
 
 .map-section {

@@ -9,12 +9,19 @@ const STOPS_FILE = path.join(BASE_DIR, "stops", "stops.txt");
 const TRIPS_FILE = path.join(BASE_DIR, "trips", "trips.txt");
 const STOP_TIMES_FILE = path.join(BASE_DIR, "stop_times", "stop_times.txt");
 const SHAPES_FILE = path.join(BASE_DIR, "shapes", "shapes.txt");
+const BUS_STATE_FILE = path.join(BASE_DIR, "bus_state.json");
 const ADAFRUIT_USERNAME = process.env.ADAFRUIT_USERNAME || "Manu123456789";
 const ADAFRUIT_FEED_NAME = process.env.ADAFRUIT_FEED_NAME || "gpslocation";
 const keyPart1 = 'aio_';
 const keyPart2 = 'DkXb66T2ZW5ihLt0rzcoj5fENnXs';
 const ADAFRUIT_AIO_KEY = process.env.ADAFRUIT_AIO_KEY || keyPart1 + keyPart2;
 const ADAFRUIT_LAST_VALUE_URL = `https://io.adafruit.com/api/v2/${ADAFRUIT_USERNAME}/feeds/${ADAFRUIT_FEED_NAME}/data/last`;
+
+const DEFAULT_BUS_TIMINGS = {
+    Delayed: { arrival: "15:10", departure: "15:15" },
+    "On Time": { arrival: "15:00", departure: "15:05" },
+    Ahead: { arrival: "14:50", departure: "14:55" }
+};
 
 function parseCsvLine(line) {
     const fields = [];
@@ -180,6 +187,72 @@ function sendFile(res, filePath, contentType) {
 
 function sendTextFile(res, filePath) {
     sendFile(res, filePath, "text/plain; charset=utf-8");
+}
+
+function readJsonFile(filePath, fallbackValue) {
+    try {
+        if (!fs.existsSync(filePath)) {
+            return fallbackValue;
+        }
+
+        const raw = fs.readFileSync(filePath, "utf8");
+        if (!raw.trim()) {
+            return fallbackValue;
+        }
+
+        return JSON.parse(raw);
+    } catch (error) {
+        console.warn(`Failed to read JSON file ${filePath}:`, error.message);
+        return fallbackValue;
+    }
+}
+
+function writeJsonFile(filePath, value) {
+    fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
+}
+
+function loadBusState() {
+    const state = readJsonFile(BUS_STATE_FILE, {});
+    return state && typeof state === "object" ? state : {};
+}
+
+function saveBusState(state) {
+    writeJsonFile(BUS_STATE_FILE, state && typeof state === "object" ? state : {});
+}
+
+function normalizeBusStatus(status) {
+    return status === "Delayed" || status === "On Time" || status === "Ahead"
+        ? status
+        : "On Time";
+}
+
+function normalizeTimingValue(value, fallback) {
+    return typeof value === "string" && /^\d{2}:\d{2}$/.test(value) ? value : fallback;
+}
+
+function normalizeBusStateEntry(entry) {
+    const status = normalizeBusStatus(entry?.status);
+    const timings = entry?.statusTimings && typeof entry.statusTimings === "object"
+        ? entry.statusTimings
+        : {};
+
+    return {
+        status,
+        statusTimings: {
+            Delayed: {
+                arrival: normalizeTimingValue(timings.Delayed?.arrival, DEFAULT_BUS_TIMINGS.Delayed.arrival),
+                departure: normalizeTimingValue(timings.Delayed?.departure, DEFAULT_BUS_TIMINGS.Delayed.departure)
+            },
+            "On Time": {
+                arrival: normalizeTimingValue(timings["On Time"]?.arrival, DEFAULT_BUS_TIMINGS["On Time"].arrival),
+                departure: normalizeTimingValue(timings["On Time"]?.departure, DEFAULT_BUS_TIMINGS["On Time"].departure)
+            },
+            Ahead: {
+                arrival: normalizeTimingValue(timings.Ahead?.arrival, DEFAULT_BUS_TIMINGS.Ahead.arrival),
+                departure: normalizeTimingValue(timings.Ahead?.departure, DEFAULT_BUS_TIMINGS.Ahead.departure)
+            }
+        }
+    };
 }
 
 function isValidLatitude(value) {
@@ -350,6 +423,52 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    if (pathname === "/api/bus-state") {
+        if (req.method === "GET") {
+            try {
+                sendJson(res, { ok: true, state: loadBusState() });
+            } catch (error) {
+                sendJson(res, { ok: false, error: "Failed to load bus state", details: error.message }, 500);
+            }
+            return;
+        }
+
+        if (req.method === "POST") {
+            try {
+                let body = "";
+                req.on("data", (chunk) => {
+                    body += chunk;
+                });
+
+                req.on("end", () => {
+                    try {
+                        const payload = body ? JSON.parse(body) : {};
+                        const routeId = String(payload.routeId || "").trim();
+
+                        if (!routeId) {
+                            sendJson(res, { ok: false, error: "routeId is required" }, 400);
+                            return;
+                        }
+
+                        const currentState = loadBusState();
+                        currentState[routeId] = normalizeBusStateEntry(payload);
+                        saveBusState(currentState);
+
+                        sendJson(res, { ok: true, routeId, state: currentState[routeId] });
+                    } catch (error) {
+                        sendJson(res, { ok: false, error: "Failed to save bus state", details: error.message }, 400);
+                    }
+                });
+            } catch (error) {
+                sendJson(res, { ok: false, error: "Failed to save bus state", details: error.message }, 500);
+            }
+            return;
+        }
+
+        sendJson(res, { ok: false, error: "Method not allowed" }, 405);
+        return;
+    }
+
     if (pathname === "/api/stops") {
         try {
             const allStops = loadStops();
@@ -464,8 +583,18 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    if (pathname === "/" || pathname === "/index.html") {
+    if (pathname === "/") {
+        sendFile(res, path.join(BASE_DIR, "login.html"), "text/html");
+        return;
+    }
+
+    if (pathname === "/index.html") {
         sendFile(res, path.join(BASE_DIR, "index.html"), "text/html");
+        return;
+    }
+
+    if (pathname === "/login" || pathname === "/login.html") {
+        sendFile(res, path.join(BASE_DIR, "login.html"), "text/html");
         return;
     }
 
@@ -474,8 +603,18 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    if (pathname === "/login.css") {
+        sendFile(res, path.join(BASE_DIR, "login.css"), "text/css");
+        return;
+    }
+
     if (pathname === "/script.js") {
         sendFile(res, path.join(BASE_DIR, "script.js"), "application/javascript");
+        return;
+    }
+
+    if (pathname === "/login.js") {
+        sendFile(res, path.join(BASE_DIR, "login.js"), "application/javascript");
         return;
     }
 

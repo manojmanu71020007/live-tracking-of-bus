@@ -12,6 +12,10 @@ const routeDetailsEl = document.getElementById("route-details");
 const selectedBusInfoEl = document.getElementById("selected-bus-info");
 const routeStopsListEl = document.getElementById("route-stops-list");
 const mapEl = document.getElementById("map");
+const accessMode = localStorage.getItem("accessMode");
+const canEditTimings = accessMode
+    ? accessMode === "login"
+    : sessionStorage.getItem("isLoggedIn") === "true";
 
 let selectedBus = null;
 let googleMap = null;
@@ -42,6 +46,9 @@ const ADAFRUIT_AIO_KEY = "aio_vwcp40GASF4gyLISllMv1hgHHrwa";
 const ADAFRUIT_FEED_NAME = "gpslocation";
 const ADAFRUIT_LAST_VALUE_URL = `https://io.adafruit.com/api/v2/${ADAFRUIT_USERNAME}/feeds/${ADAFRUIT_FEED_NAME}/data/last`;
 const LIVE_TRACKING_INTERVAL_MS = 5000;
+const SHARED_STATE_REFRESH_INTERVAL_MS = 3000;
+
+let sharedStateRefreshIntervalId = null;
 
 function normalize(value) {
     return value.trim().toLowerCase();
@@ -101,7 +108,11 @@ function renderBusList(list) {
 
     busListEl.innerHTML = summaryHtml + listToRender
         .map((bus) => {
-            const statusClass = bus.status === "On Time" ? "on-time" : "delayed";
+            const statusClass = bus.status === "On Time"
+                ? "on-time"
+                : bus.status === "Ahead"
+                    ? "ahead"
+                    : "delayed";
             const isActive = selectedBus && selectedBus.routeId === bus.routeId ? "active" : "";
 
             return `
@@ -131,7 +142,109 @@ function renderEmptyState(message) {
     busListEl.innerHTML = `<p class="meta">${message}</p>`;
 }
 
+async function fetchSharedBusState() {
+    try {
+        const response = await fetch("/api/bus-state");
+        if (!response.ok) {
+            return {};
+        }
+
+        const payload = await response.json();
+        return payload && payload.ok && payload.state && typeof payload.state === "object"
+            ? payload.state
+            : {};
+    } catch (error) {
+        console.warn("Could not load shared bus state", error);
+        return {};
+    }
+}
+
+async function saveBusOverride(bus) {
+    try {
+        await fetch("/api/bus-state", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                routeId: bus.routeId,
+                status: bus.status,
+                statusTimings: bus.statusTimings
+            })
+        });
+    } catch (error) {
+        console.warn("Could not save shared bus state", error);
+    }
+}
+
+function formatTimeForDisplay(time24) {
+    const parts = String(time24 || "").split(":");
+    if (parts.length !== 2) {
+        return "N/A";
+    }
+
+    const hours = Number.parseInt(parts[0], 10);
+    const minutes = Number.parseInt(parts[1], 10);
+
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
+        return "N/A";
+    }
+
+    const suffix = hours >= 12 ? "PM" : "AM";
+    const hour12 = ((hours + 11) % 12) + 1;
+    return `${hour12}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function ensureStatusTimings(bus) {
+    if (!bus.statusTimings) {
+        bus.statusTimings = {
+            Delayed: { arrival: "15:10", departure: "15:15" },
+            "On Time": { arrival: "15:00", departure: "15:05" },
+            Ahead: { arrival: "14:50", departure: "14:55" }
+        };
+    }
+
+    if (!bus.statusTimings[bus.status]) {
+        bus.statusTimings[bus.status] = { arrival: "15:00", departure: "15:05" };
+    }
+}
+
 function renderBusDetails(bus) {
+    ensureStatusTimings(bus);
+    const currentTiming = bus.statusTimings[bus.status];
+    const timingNote = canEditTimings
+        ? ""
+        : "<p class=\"meta\"><strong>Locked:</strong> Login with Mobile number / Email and Password to edit status and timings.</p>";
+    const statusSectionHtml = canEditTimings
+        ? `
+        <div class="status-control">
+            <label for="status-select"><strong>Status:</strong></label>
+            <select id="status-select">
+                <option value="Delayed" ${bus.status === "Delayed" ? "selected" : ""}>Delayed</option>
+                <option value="On Time" ${bus.status === "On Time" ? "selected" : ""}>On-Time</option>
+                <option value="Ahead" ${bus.status === "Ahead" ? "selected" : ""}>Ahead</option>
+            </select>
+        </div>
+        `
+        : `<p><strong>Status:</strong> ${bus.status}</p>`;
+    const timingSectionHtml = canEditTimings
+        ? `
+        <div class="timing-controls">
+            <div class="time-input-wrap">
+                <label for="arrival-time"><strong>Arrival Time:</strong></label>
+                <input id="arrival-time" type="time" value="${currentTiming.arrival}">
+            </div>
+            <div class="time-input-wrap">
+                <label for="departure-time"><strong>Departure Time:</strong></label>
+                <input id="departure-time" type="time" value="${currentTiming.departure}">
+                <button type="button" id="apply-changes-btn" class="apply-changes-btn">Apply Changes</button>
+            </div>
+        </div>
+        `
+        : `
+        <p><strong>Arrival Time:</strong> ${formatTimeForDisplay(currentTiming.arrival)}</p>
+        <p><strong>Departure Time:</strong> ${formatTimeForDisplay(currentTiming.departure)}</p>
+        `;
     const stopListHtml = bus.stops.length
         ? `<ul>${bus.stops.map((stop) => `<li>${stop}</li>`).join("")}</ul>`
         : "<p>No stop details available for this route.</p>";
@@ -152,9 +265,9 @@ function renderBusDetails(bus) {
         <p><strong>Route:</strong> ${displayRoute}</p>
         <p><strong>Origin:</strong> ${displayOrigin}</p>
         <p><strong>Destination:</strong> ${displayDestination}</p>
-        <p><strong>Status:</strong> ${bus.status}</p>
-        <p><strong>Arrival Time:</strong> 3:00 PM</p>
-        <p><strong>Departure Time:</strong> 3:05 PM</p>
+        ${statusSectionHtml}
+        ${timingSectionHtml}
+        ${timingNote}
         <p><strong>Total Distance:</strong> 4.2 km</p>
         <p><strong>ETA:</strong> 9 minutes</p>
         <p><strong>Trip ID:</strong> ${bus.tripId || "N/A"}</p>
@@ -165,6 +278,35 @@ function renderBusDetails(bus) {
 
     busDetailsEl.style.display = "block";
     routeDetailsEl.style.display = "block";
+}
+
+function applySelectedBusFormChanges() {
+    if (!selectedBus || !canEditTimings) {
+        return;
+    }
+
+    const statusSelect = document.getElementById("status-select");
+    const arrivalInput = document.getElementById("arrival-time");
+    const departureInput = document.getElementById("departure-time");
+
+    if (statusSelect) {
+        selectedBus.status = statusSelect.value;
+    }
+
+    ensureStatusTimings(selectedBus);
+    const currentTiming = selectedBus.statusTimings[selectedBus.status];
+
+    if (arrivalInput && arrivalInput.value) {
+        currentTiming.arrival = arrivalInput.value;
+    }
+
+    if (departureInput && departureInput.value) {
+        currentTiming.departure = departureInput.value;
+    }
+
+    void saveBusOverride(selectedBus);
+    renderBusDetails(selectedBus);
+    renderBusList(filterBuses());
 }
 
 function getPseudoLocation(seedValue) {
@@ -678,7 +820,7 @@ async function drawRoutePathForBus(bus) {
     return true;
 }
 
-function toBusModel(route, index) {
+function toBusModel(route, index, sharedState = {}) {
     const routeId = String(route.routeId || `route-${index + 1}`);
     const busNumber = (route.busNumber || "N/A").trim();
     const origin = (route.origin || "Unknown Origin").trim();
@@ -687,7 +829,7 @@ function toBusModel(route, index) {
     const routeTrips = gtfsBundle ? gtfsBundle.trips.filter((trip) => String(trip.routeId) === routeId) : [];
     const primaryTrip = routeTrips[0] || null;
 
-    return {
+    const model = {
         routeId,
         busNumber,
         routeName: route.routeName || `${origin} ⇔ ${destination}`,
@@ -695,11 +837,32 @@ function toBusModel(route, index) {
         destination,
         etaMinutes: 3 + (index % 18),
         status: index % 5 === 0 ? "Delayed" : "On Time",
+        statusTimings: {
+            Delayed: { arrival: "15:10", departure: "15:15" },
+            "On Time": { arrival: "15:00", departure: "15:05" },
+            Ahead: { arrival: "14:50", departure: "14:55" }
+        },
         location: getPseudoLocation(routeId),
         tripId: primaryTrip ? primaryTrip.tripId : "",
         shapeId: primaryTrip ? primaryTrip.shapeId : "",
         stops: routeStops.length ? routeStops : [origin, "Midway Stop", destination]
     };
+
+    const saved = sharedState[routeId];
+    if (saved) {
+        if (saved.status === "Delayed" || saved.status === "On Time" || saved.status === "Ahead") {
+            model.status = saved.status;
+        }
+
+        if (saved.statusTimings && typeof saved.statusTimings === "object") {
+            model.statusTimings = {
+                ...model.statusTimings,
+                ...saved.statusTimings
+            };
+        }
+    }
+
+    return model;
 }
 
 async function loadBusesFromBackend() {
@@ -724,7 +887,46 @@ async function loadBusesFromBackend() {
         stopsById: new Map(stops.map((stop) => [String(stop.stopId), stop]))
     };
 
-    buses = routes.map((route, index) => toBusModel(route, index));
+    const sharedState = await fetchSharedBusState();
+    buses = routes.map((route, index) => toBusModel(route, index, sharedState));
+}
+
+async function refreshSharedBusState() {
+    if (canEditTimings) {
+        return;
+    }
+
+    const sharedState = await fetchSharedBusState();
+    buses = buses.map((bus) => {
+        const saved = sharedState[bus.routeId];
+
+        if (!saved) {
+            return bus;
+        }
+
+        const updatedBus = {
+            ...bus,
+            status: saved.status === "Delayed" || saved.status === "On Time" || saved.status === "Ahead"
+                ? saved.status
+                : bus.status,
+            statusTimings: {
+                ...bus.statusTimings,
+                ...saved.statusTimings
+            }
+        };
+
+        return updatedBus;
+    });
+
+    if (selectedBus) {
+        const refreshedSelectedBus = buses.find((bus) => bus.routeId === selectedBus.routeId);
+        if (refreshedSelectedBus) {
+            selectedBus = refreshedSelectedBus;
+            renderBusDetails(selectedBus);
+        }
+    }
+
+    renderBusList(filterBuses());
 }
 
 function matchesSpecialSearch() {
@@ -862,6 +1064,54 @@ function setupEvents() {
             }
         });
     });
+
+    selectedBusInfoEl.addEventListener("change", (event) => {
+        if (!selectedBus) {
+            return;
+        }
+
+        if (event.target.id === "status-select") {
+            if (!canEditTimings) {
+                renderBusDetails(selectedBus);
+                return;
+            }
+
+            selectedBus.status = event.target.value;
+            ensureStatusTimings(selectedBus);
+            void saveBusOverride(selectedBus);
+            renderBusDetails(selectedBus);
+            renderBusList(filterBuses());
+            return;
+        }
+
+        if (event.target.id === "arrival-time" || event.target.id === "departure-time") {
+            if (!canEditTimings) {
+                renderBusDetails(selectedBus);
+                return;
+            }
+
+            ensureStatusTimings(selectedBus);
+            const current = selectedBus.statusTimings[selectedBus.status];
+
+            if (event.target.id === "arrival-time") {
+                current.arrival = event.target.value;
+            } else {
+                current.departure = event.target.value;
+            }
+
+            void saveBusOverride(selectedBus);
+            renderBusDetails(selectedBus);
+            renderBusList(filterBuses());
+        }
+    });
+
+    selectedBusInfoEl.addEventListener("click", (event) => {
+        if (!selectedBus || event.target.id !== "apply-changes-btn") {
+            return;
+        }
+
+        applySelectedBusFormChanges();
+    });
 }
 
 function initGoogleMap() {
@@ -897,6 +1147,12 @@ async function initApp() {
     }
 
     renderEmptyState("Use the search fields, then press Show All Buses to view the filtered Dibbur Cross to Rajanukunte service set.");
+
+    if (!canEditTimings) {
+        sharedStateRefreshIntervalId = window.setInterval(() => {
+            void refreshSharedBusState();
+        }, SHARED_STATE_REFRESH_INTERVAL_MS);
+    }
 }
 
 initApp();
